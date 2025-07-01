@@ -23,7 +23,9 @@ app.use('/api/submissions', submissionRoutes);
 
 // Basic route for testing
 app.get('/', (req, res) => {
-  res.send('Online Judge API is running!');
+  res.send('AwlOJ API is running!');
+  res.send('fromlowngwithluv!');
+  res.send('iukhuenn&haanhh!');
 });
 
 // Start the server
