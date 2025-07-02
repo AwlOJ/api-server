@@ -5,8 +5,8 @@ const { auth, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 // Admin only route to create a problem
-router.post('/', auth, authorize(['admin']), createProblem);
-
+// router.post('/', auth, authorize(['admin']), createProblem);
+router.post('/', auth, createProblem);
 // Public route to get all problems
 router.get('/', getProblems);
 
