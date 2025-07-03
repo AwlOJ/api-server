@@ -5,11 +5,17 @@ const config = require('./config');
 const authRoutes = require('./routes/auth.routes');
 const problemRoutes = require('./routes/problem.routes');
 const submissionRoutes = require('./routes/submission.routes');
+const cors = require('cors'); 
 
 const app = express();
 
 // Middleware
+app.use(cors({
+  origin: config.clientOrigin,
+  credentials: true
+}));
 app.use(bodyParser.json());
+
 
 // Connect to MongoDB
 mongoose.connect(config.mongoURI)

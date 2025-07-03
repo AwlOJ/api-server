@@ -5,4 +5,5 @@ module.exports = {
   mongoURI: process.env.MONGO_URI,
   redisURL: process.env.REDIS_URL,
   jwtSecret: process.env.JWT_SECRET,
+  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173'
 };
