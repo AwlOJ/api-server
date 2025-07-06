@@ -10,7 +10,8 @@ const auth = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, config.jwtSecret);
-    req.user = decoded;
+    req.userId = decoded.userId; // Set req.userId from the token payload
+    req.user = decoded; // Keep req.user for consistency if other parts of the app rely on it
     next();
   } catch (error) {
     res.status(401).json({ message: 'Token is not valid' });

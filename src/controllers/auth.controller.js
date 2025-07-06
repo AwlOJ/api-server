@@ -54,7 +54,21 @@ const login = async (req, res) => {
   }
 };
 
+const getLoggedInUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('-password'); // Exclude password from the response
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json(user);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   signup,
   login,
+  getLoggedInUser,
 };
