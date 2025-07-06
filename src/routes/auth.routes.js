@@ -1,6 +1,6 @@
 const express = require('express');
 const { signup, login, getLoggedInUser } = require('../controllers/auth.controller');
-const { auth } = require('../middleware/auth'); // Corrected import to destructure 'auth'
+const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
