@@ -26,7 +26,6 @@ try {
 
 } catch (error) {
   console.error('Failed to initialize Redis client for queue service:', error);
-  // Handle scenario where Redis client cannot be initialized, e.g., exit process
   process.exit(1);
 }
 
