@@ -8,7 +8,17 @@ try {
   redisClient = new Redis({
     host: redisUrl.hostname,
     port: redisUrl.port ? parseInt(redisUrl.port, 10) : 6379,
-    password: redisUrl.password, // This will be empty string if no password in URL
+    password: redisUrl.password,
+
+    retryStrategy: function (times) {
+      const delay = Math.min(times * 50, 2000); 
+      console.log(`Redis: Trying reconnect ${times}, ping ${delay}ms`);
+      return delay;
+    },
+    maxRetriesPerRequest: null, 
+    enableReadyCheck: true, 
+    keepAlive: 30000, 
+    connectTimeout: 10000, 
   });
 
   redisClient.on('connect', () => console.log('Redis client connected for queue service.'));
@@ -19,7 +29,6 @@ try {
   // Handle scenario where Redis client cannot be initialized, e.g., exit process
   process.exit(1);
 }
-
 
 const addSubmissionJob = async (submissionId) => {
   if (!redisClient) {
