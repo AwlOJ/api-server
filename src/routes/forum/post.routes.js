@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getPostsByTopic, createPost, likePost } = require('../../controllers/forum/post.controller');
+const { getPostsByTopic, createPost, likePost, deletePost } = require('../../controllers/forum/post.controller');
 const { auth } = require('../../middleware/auth');
 const { validatePost } = require('../../middleware/forum/validation');
 const { createPostLimiter, likeLimiter } = require('../../middleware/forum/rateLimit');
@@ -8,5 +8,6 @@ const { createPostLimiter, likeLimiter } = require('../../middleware/forum/rateL
 router.get('/topic/:topicId', getPostsByTopic);
 router.post('/', auth, createPostLimiter, validatePost, createPost);
 router.post('/:id/like', auth, likeLimiter, likePost);
+router.delete('/:id', auth, deletePost);
 
 module.exports = router;
