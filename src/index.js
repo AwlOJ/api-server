@@ -12,13 +12,13 @@ const cors = require('cors');
 const app = express();
 
 // Middleware
-/*
+
 app.use(helmet()); // Add security headers
 app.use(cors({
   origin: config.clientOrigin,
   credentials: true
 }));
-*/
+
 app.use(bodyParser.json());
 
 
