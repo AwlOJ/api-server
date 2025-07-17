@@ -103,6 +103,7 @@ const sendWelcomeEmail = async (userId) => {
         </ul>
         <p>Happy coding!</p>
         <p>The AwlOJ Team</p>
+        <p>© 2025 longathelstan. Built with ❤️</p>
       `
     };
 
