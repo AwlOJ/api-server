@@ -7,10 +7,26 @@ const getTopics = async (req, res) => {
     const { page = 1, limit = 20, sort = 'lastActivity', categoryId } = req.query;
     const query = categoryId ? { category: categoryId } : {};
     
+    // Define sort options
+    let sortOption = {};
+    switch (sort) {
+      case 'newest':
+        sortOption = { createdAt: -1 };
+        break;
+      case 'popular':
+        sortOption = { viewCount: -1 };
+        break;
+      case 'replies':
+        sortOption = { replyCount: -1 };
+        break;
+      default:
+        sortOption = { lastActivity: -1 };
+    }
+    
     const topics = await Topic.find(query)
       .populate('author', 'username')
       .populate('category', 'name slug')
-      .sort({ [sort]: -1 })
+      .sort(sortOption)
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .exec();
@@ -30,6 +46,61 @@ const getTopics = async (req, res) => {
       }
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+};
+
+// GET /api/forum/topics/search
+const searchTopics = async (req, res) => {
+  try {
+    const { q, categoryId, tags, page = 1, limit = 20 } = req.query;
+    
+    // Build search query
+    const query = {};
+    
+    // Text search on title and content
+    if (q) {
+      query.$or = [
+        { title: { $regex: q, $options: 'i' } },
+        { content: { $regex: q, $options: 'i' } }
+      ];
+    }
+    
+    // Category filter
+    if (categoryId) {
+      query.category = categoryId;
+    }
+    
+    // Tags filter
+    if (tags) {
+      const tagArray = tags.split(',').map(tag => tag.trim());
+      query.tags = { $in: tagArray };
+    }
+    
+    const topics = await Topic.find(query)
+      .populate('author', 'username')
+      .populate('category', 'name slug')
+      .sort({ lastActivity: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+    
+    const count = await Topic.countDocuments(query);
+    
+    res.json({
+      success: true,
+      data: {
+        topics,
+        searchQuery: { q, categoryId, tags },
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: count,
+          pages: Math.ceil(count / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
@@ -76,6 +147,7 @@ const createTopic = async (req, res) => {
 
 module.exports = {
   getTopics,
+  searchTopics,
   getTopicBySlug,
   createTopic,
 };
