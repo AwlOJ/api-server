@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const slugify = require('slugify');
+const { generateUniqueSlug, generateVietnameseSlug } = require('../../utils/forum/slugGenerator');
 
 const topicSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true, minlength: 5, maxlength: 200 },
@@ -16,12 +16,26 @@ const topicSchema = new mongoose.Schema({
   lastPost: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' },
 }, { timestamps: true });
 
-topicSchema.pre('save', function(next) {
+// Generate unique slug before saving
+topicSchema.pre('save', async function(next) {
   if (!this.isModified('title')) {
     return next();
   }
-  this.slug = slugify(this.title, { lower: true, strict: true });
-  next();
+  
+  try {
+    // Use Vietnamese slug generator for Vietnamese text
+    const baseSlug = generateVietnameseSlug(this.title);
+    this.slug = await generateUniqueSlug(baseSlug, mongoose.model('Topic'));
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
+
+// Index for better search performance
+topicSchema.index({ title: 'text', content: 'text' });
+topicSchema.index({ tags: 1 });
+topicSchema.index({ category: 1, lastActivity: -1 });
+topicSchema.index({ author: 1 });
 
 module.exports = mongoose.model('Topic', topicSchema);
