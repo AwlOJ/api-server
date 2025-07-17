@@ -1,15 +1,18 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
+const helmet = require('helmet');
 const config = require('./config');
 const authRoutes = require('./routes/auth.routes');
 const problemRoutes = require('./routes/problem.routes');
 const submissionRoutes = require('./routes/submission.routes');
+const forumRoutes = require('./routes/forum'); // Updated path
 const cors = require('cors'); 
 
 const app = express();
 
 // Middleware
+app.use(helmet()); // Add security headers
 app.use(cors({
   origin: config.clientOrigin,
   credentials: true
@@ -26,6 +29,7 @@ mongoose.connect(config.mongoURI)
 app.use('/api/auth', authRoutes);
 app.use('/api/problems', problemRoutes);
 app.use('/api/submissions', submissionRoutes);
+app.use('/api/forum', forumRoutes);
 
 // Basic route for testing
 app.get('/', (req, res) => {
