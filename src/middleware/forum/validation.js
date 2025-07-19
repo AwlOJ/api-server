@@ -1,4 +1,5 @@
 const { body, validationResult } = require('express-validator');
+const Category = require('../../models/forum/Category'); 
 
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
@@ -11,7 +12,15 @@ const handleValidationErrors = (req, res, next) => {
 const validateTopic = [
   body('title').isLength({ min: 5, max: 200 }).withMessage('Title must be between 5 and 200 characters'),
   body('content').isLength({ min: 10, max: 10000 }).withMessage('Content must be between 10 and 10000 characters'),
-  body('categoryId').isMongoId().withMessage('Invalid category ID'),
+  body('categoryId')
+    .isMongoId().withMessage('Invalid category ID')
+    .custom(async (value) => {
+      const category = await Category.findById(value);
+      if (!category) {
+        throw new Error('Category not found');
+      }
+      return true;
+    }),
   body('tags').isArray({ max: 5 }).withMessage('You can have a maximum of 5 tags'),
   body('tags.*').isLength({ min: 2, max: 20 }).withMessage('Tags must be between 2 and 20 characters'),
   handleValidationErrors,

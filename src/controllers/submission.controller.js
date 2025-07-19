@@ -1,10 +1,20 @@
 const Submission = require('../models/Submission');
+const Problem = require('../models/Problem'); 
 const { addSubmissionJob } = require('../services/queue.service');
 
 const submitCode = async (req, res) => {
   try {
     const { problemId, code, language } = req.body;
-    const userId = req.user.userId; // From auth middleware
+    const userId = req.user.userId;
+
+    // ✅ ADD: Validate problem exists
+    const problemExists = await Problem.findById(problemId);
+    if (!problemExists) {
+      return res.status(400).json({
+        success: false,
+        message: 'Problem not found'
+      });
+    }
 
     const newSubmission = new Submission({
       userId,
@@ -15,12 +25,14 @@ const submitCode = async (req, res) => {
     });
 
     await newSubmission.save();
-
     await addSubmissionJob(newSubmission._id);
 
-    res.status(202).json({ submissionId: newSubmission._id, message: 'Submission received and added to queue' });
+    res.status(202).json({ 
+      submissionId: newSubmission._id, 
+      message: 'Submission received and added to queue' 
+    });
   } catch (error) {
-    console.error(error);
+    console.error('Submit code error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };

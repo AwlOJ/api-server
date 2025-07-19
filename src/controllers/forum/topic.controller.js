@@ -5,7 +5,27 @@ const Category = require('../../models/forum/Category');
 const getTopics = async (req, res) => {
   try {
     const { page = 1, limit = 20, sort = 'lastActivity', categoryId } = req.query;
-    const query = categoryId ? { category: categoryId } : {};
+    
+    let query = {};
+    
+    if (categoryId) {
+      const categoryExists = await Category.findById(categoryId);
+      if (!categoryExists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Category not found'
+        });
+      }
+      
+      query = { 
+        category: categoryId,
+        $expr: { $ne: ['$category', null] }
+      };
+    } else {
+      query = { 
+        category: { $ne: null, $exists: true }
+      };
+    }
     
     // Define sort options
     let sortOption = {};
@@ -46,6 +66,70 @@ const getTopics = async (req, res) => {
       }
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+};
+
+const getTopicsByCategorySlug = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { page = 1, limit = 20, sort = 'lastActivity' } = req.query;
+    
+    // Find category by slug
+    const category = await Category.findOne({ slug });
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found'
+      });
+    }
+    
+    // Define sort options
+    let sortOption = {};
+    switch (sort) {
+      case 'newest':
+        sortOption = { createdAt: -1 };
+        break;
+      case 'popular':
+        sortOption = { viewCount: -1 };
+        break;
+      case 'replies':
+        sortOption = { replyCount: -1 };
+        break;
+      default:
+        sortOption = { lastActivity: -1 };
+    }
+    
+    const query = { 
+      category: category._id,
+      $expr: { $ne: ['$category', null] }
+    };
+    
+    const topics = await Topic.find(query)
+      .populate('author', 'username')
+      .populate('category', 'name slug')
+      .sort(sortOption)
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .exec();
+
+    const count = await Topic.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        category,
+        topics,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: count,
+          pages: Math.ceil(count / limit),
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get topics by category error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
@@ -126,6 +210,15 @@ const createTopic = async (req, res) => {
     const { title, content, categoryId, tags } = req.body;
     const author = req.user.userId;
 
+    const categoryExists = await Category.findById(categoryId);
+    if (!categoryExists) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [{ field: 'categoryId', message: 'Category not found' }]
+      });
+    }
+
     const newTopic = new Topic({
       title,
       content,
@@ -136,11 +229,14 @@ const createTopic = async (req, res) => {
 
     await newTopic.save();
     
-    // Update category stats
-    await Category.findByIdAndUpdate(categoryId, { $inc: { topicCount: 1 }, lastTopic: newTopic._id });
+    await Category.findByIdAndUpdate(categoryId, { 
+      $inc: { topicCount: 1 }, 
+      lastTopic: newTopic._id 
+    });
 
     res.status(201).json({ success: true, data: newTopic });
   } catch (error) {
+    console.error('Create topic error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
@@ -149,5 +245,6 @@ module.exports = {
   getTopics,
   searchTopics,
   getTopicBySlug,
+  getTopicsByCategorySlug,
   createTopic,
 };

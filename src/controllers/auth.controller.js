@@ -28,6 +28,69 @@ const signup = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+/*
+// ADD: Password validation function
+const validatePassword = (password) => {
+  const minLength = 8;
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumbers = /\d/.test(password);
+  
+  if (password.length < minLength) {
+    return { valid: false, message: 'Password must be at least 8 characters long' };
+  }
+  if (!hasUpperCase) {
+    return { valid: false, message: 'Password must contain at least one uppercase letter' };
+  }
+  if (!hasLowerCase) {
+    return { valid: false, message: 'Password must contain at least one lowercase letter' };
+  }
+  if (!hasNumbers) {
+    return { valid: false, message: 'Password must contain at least one number' };
+  }
+  
+  return { valid: true };
+};
+
+const signup = async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+
+    // ✅ ADD: Validate password strength
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ 
+        message: passwordValidation.message 
+      });
+    }
+
+    // ✅ ADD: Check username uniqueness
+    let existingUser = await User.findOne({ 
+      $or: [{ email }, { username }] 
+    });
+    if (existingUser) {
+      const field = existingUser.email === email ? 'email' : 'username';
+      return res.status(400).json({ 
+        message: `${field === 'email' ? 'Email' : 'Username'} already exists` 
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12); // ✅ Increase salt rounds
+
+    const user = new User({
+      username,
+      email,
+      password: hashedPassword,
+    });
+
+    await user.save();
+
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (error) {
+    console.error('Signup error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};*/
 
 const login = async (req, res) => {
   try {
