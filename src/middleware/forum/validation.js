@@ -4,7 +4,11 @@ const Category = require('../../models/forum/Category');
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ success: false, errors: errors.array() });
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Validation failed',
+      errors: errors.array()
+    });
   }
   next();
 };
@@ -15,14 +19,25 @@ const validateTopic = [
   body('categoryId')
     .isMongoId().withMessage('Invalid category ID')
     .custom(async (value) => {
-      const category = await Category.findById(value);
-      if (!category) {
-        throw new Error('Category not found');
+      try {
+        const category = await Category.findById(value);
+        if (!category) {
+          throw new Error('Category not found');
+        }
+        return true;
+      } catch (error) {
+        if (error.message === 'Category not found') {
+          throw error;
+        }
+        throw new Error('Database error while validating category');
       }
-      return true;
     }),
-  body('tags').isArray({ max: 5 }).withMessage('You can have a maximum of 5 tags'),
-  body('tags.*').isLength({ min: 2, max: 20 }).withMessage('Tags must be between 2 and 20 characters'),
+  body('tags')
+    .optional()
+    .isArray({ max: 5 }).withMessage('You can have a maximum of 5 tags'),
+  body('tags.*')
+    .optional()
+    .isLength({ min: 2, max: 20 }).withMessage('Tags must be between 2 and 20 characters'),
   handleValidationErrors,
 ];
 

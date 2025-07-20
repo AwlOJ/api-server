@@ -7,9 +7,14 @@ const signup = async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    let user = await User.findOne({ email });
+    let user = await User.findOne({ 
+      $or: [{ email }, { username }] 
+    });
     if (user) {
-      return res.status(400).json({ message: 'User already exists' });
+      const field = user.email === email ? 'email' : 'username';
+      return res.status(400).json({ 
+        message: `${field === 'email' ? 'Email' : 'Username'} already exists` 
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -65,11 +70,11 @@ const signup = async (req, res) => {
     }
 
     // ✅ ADD: Check username uniqueness
-    let existingUser = await User.findOne({ 
+    let user = await User.findOne({ 
       $or: [{ email }, { username }] 
     });
-    if (existingUser) {
-      const field = existingUser.email === email ? 'email' : 'username';
+    if (user) {
+      const field = user.email === email ? 'email' : 'username';
       return res.status(400).json({ 
         message: `${field === 'email' ? 'Email' : 'Username'} already exists` 
       });

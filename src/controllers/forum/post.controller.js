@@ -80,16 +80,17 @@ const createPost = async (req, res) => {
 
     await newPost.save();
     
-    // Populate author info for response
     await newPost.populate('author', 'username');
 
-    // Update user activity
     await updateUserActivity(author);
 
-    // Process notifications (async, don't wait)
-    processPostNotifications(newPost, topic).catch(err => 
-      console.error('Notification error:', err)
-    );
+    // BETTER ASYNC HANDLING - Use proper error handling
+    try {
+      await processPostNotifications(newPost, topic);
+    } catch (notificationError) {
+      console.error('Notification error:', notificationError);
+      // Don't fail the request if notifications fail
+    }
 
     res.status(201).json({ success: true, data: newPost });
   } catch (error) {
