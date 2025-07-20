@@ -1,32 +1,42 @@
 const mongoose = require('mongoose');
 
 const postSchema = new mongoose.Schema({
-  content: { type: String, required: true, trim: true, minlength: 1, maxlength: 10000 },
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  topic: { type: mongoose.Schema.Types.ObjectId, ref: 'Topic', required: true },
-  replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' },
-  likeCount: { type: Number, default: 0 },
-  position: { type: Number },
+  content: { 
+    type: String, 
+    required: true, 
+    trim: true, 
+    minlength: 1, 
+    maxlength: 10000 
+  },
+  author: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true,
+    index: true
+  },
+  topic: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Topic', 
+    required: true,
+    index: true
+  },
+  replyTo: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Post' 
+  },
+  likeCount: { 
+    type: Number, 
+    default: 0 
+  },
+  // The position of the post within the topic, e.g., #1, #2, etc.
+  position: { 
+    type: Number,
+    index: true
+  },
 }, { timestamps: true });
 
-// When a new post is created, update topic and category stats
-postSchema.post('save', async function(doc) {
-  const Topic = mongoose.model('Topic');
-  const Category = mongoose.model('Category');
-  
-  const topic = await Topic.findById(doc.topic);
-  if (topic) {
-    topic.replyCount += 1;
-    topic.lastActivity = doc.createdAt;
-    topic.lastPost = doc._id;
-    await topic.save();
-
-    const category = await Category.findById(topic.category);
-    if (category) {
-      category.postCount += 1;
-      await category.save();
-    }
-  }
-});
+// The logic that was previously in the post('save') hook has been removed.
+// It will now be handled in the Post controller using a transaction 
+// to ensure data integrity and better performance.
 
 module.exports = mongoose.model('Post', postSchema);

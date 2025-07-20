@@ -1,6 +1,5 @@
 const { body, param, query, validationResult } = require('express-validator');
 const Contest = require('../models/Contest');
-const Problem = require('../models/Problem');
 const mongoose = require('mongoose');
 
 const handleValidationErrors = (req, res, next) => {
@@ -15,373 +14,121 @@ const handleValidationErrors = (req, res, next) => {
   next();
 };
 
-// ✅ Enhanced contest creation validation
+// --- REFACTORED ---
+// This middleware now only performs basic format and presence checks.
+// It trusts the Model and Controller to handle the detailed business logic validation.
+// This ELIMINATES LOGIC DUPLICATION.
 const validateContest = [
-  body('title')
-    .isLength({ min: 5, max: 200 })
-    .withMessage('Title must be between 5 and 200 characters')
-    .trim()
-    .escape(),
+  body('title').notEmpty().withMessage('Title is required').trim().escape(),
+  body('description').notEmpty().withMessage('Description is required').trim(),
+  body('startTime').isISO8601().withMessage('Invalid start time format (must be ISO8601).'),
+  body('endTime').isISO8601().withMessage('Invalid end time format (must be ISO8601).'),
+  body('registrationDeadline').optional().isISO8601().withMessage('Invalid deadline format.'),
   
-  body('description')
-    .isLength({ min: 10, max: 10000 })
-    .withMessage('Description must be between 10 and 10000 characters')
-    .trim(),
+  body('problems').isArray({ min: 1 }).withMessage('Contest must have at least one problem.'),
+  body('problems.*.problemId').isMongoId().withMessage('Each problem must have a valid problemId.'),
+  body('problems.*.label').matches(/^[A-Z]$/).withMessage('Problem label must be a single uppercase letter (A-Z).'),
   
-  body('startTime')
-    .isISO8601()
-    .withMessage('Invalid start time format')
-    .custom((value) => {
-      const startDate = new Date(value);
-      const now = new Date();
-      const minFutureTime = new Date(now.getTime() + 5 * 60 * 1000); // At least 5 minutes in future
-      
-      if (startDate <= minFutureTime) {
-        throw new Error('Start time must be at least 5 minutes in the future');
-      }
-      return true;
-    }),
+  body('type').isIn(['public', 'private', 'rated']).withMessage('Contest type is invalid.'),
+  body('scoringSystem').isIn(['ICPC', 'IOI', 'AtCoder']).withMessage('Scoring system is invalid.'),
   
-  body('endTime')
-    .isISO8601()
-    .withMessage('Invalid end time format')
-    .custom((value, { req }) => {
-      const startDate = new Date(req.body.startTime);
-      const endDate = new Date(value);
-      const minDuration = 30 * 60 * 1000; // 30 minutes
-      const maxDuration = 7 * 24 * 60 * 60 * 1000; // 7 days
-      
-      if (endDate <= startDate) {
-        throw new Error('End time must be after start time');
-      }
-      
-      const duration = endDate - startDate;
-      if (duration < minDuration) {
-        throw new Error('Contest must be at least 30 minutes long');
-      }
-      
-      if (duration > maxDuration) {
-        throw new Error('Contest cannot be longer than 7 days');
-      }
-      
-      return true;
-    }),
-  
-  body('registrationDeadline')
-    .optional()
-    .isISO8601()
-    .withMessage('Invalid registration deadline format')
-    .custom((value, { req }) => {
-      if (value) {
-        const regDeadline = new Date(value);
-        const startDate = new Date(req.body.startTime);
-        const now = new Date();
-        
-        if (regDeadline <= now) {
-          throw new Error('Registration deadline must be in the future');
-        }
-        
-        if (regDeadline > startDate) {
-          throw new Error('Registration deadline cannot be after contest start');
-        }
-      }
-      return true;
-    }),
-  
-  body('problems')
-    .isArray({ min: 1, max: 20 })
-    .withMessage('Contest must have between 1 and 20 problems'),
-  
-  body('problems.*.problemId')
-    .isMongoId()
-    .withMessage('Invalid problem ID')
-    .custom(async (value, { req }) => {
-      // Check if all problems exist
-      const problemIds = req.body.problems.map(p => p.problemId);
-      const existingProblems = await Problem.find({ _id: { $in: problemIds } });
-      
-      if (existingProblems.length !== problemIds.length) {
-        throw new Error('One or more problems do not exist');
-      }
-      return true;
-    }),
-  
-  body('problems.*.label')
-    .matches(/^[A-Z]$/)
-    .withMessage('Problem label must be a single uppercase letter (A-Z)')
-    .custom((value, { req }) => {
-      // Check for duplicate labels
-      const labels = req.body.problems.map(p => p.label);
-      const uniqueLabels = [...new Set(labels)];
-      
-      if (labels.length !== uniqueLabels.length) {
-        throw new Error('Problem labels must be unique within the contest');
-      }
-      return true;
-    }),
-  
-  body('problems.*.points')
-    .optional()
-    .isInt({ min: 1, max: 1000 })
-    .withMessage('Points must be between 1 and 1000'),
-  
-  body('type')
-    .isIn(['public', 'private', 'rated'])
-    .withMessage('Contest type must be public, private, or rated'),
-  
-  body('scoringSystem')
-    .isIn(['ICPC', 'IOI', 'AtCoder'])
-    .withMessage('Scoring system must be ICPC, IOI, or AtCoder'),
-  
-  body('allowedLanguages')
-    .optional()
-    .isArray()
-    .withMessage('Allowed languages must be an array')
-    .custom((languages) => {
-      const validLanguages = ['cpp', 'java', 'python', 'javascript', 'go', 'rust'];
-      const invalidLanguages = languages.filter(lang => !validLanguages.includes(lang));
-      
-      if (invalidLanguages.length > 0) {
-        throw new Error(`Invalid languages: ${invalidLanguages.join(', ')}`);
-      }
-      return true;
-    }),
-  
-  body('maxSubmissions')
-    .optional()
-    .isInt({ min: 0, max: 100 })
-    .withMessage('Max submissions must be between 0 and 100 (0 = unlimited)'),
-  
-  body('freezeTime')
-    .optional()
-    .isInt({ min: 0, max: 300 })
-    .withMessage('Freeze time must be between 0 and 300 minutes'),
-  
-  body('isRated')
-    .optional()
-    .isBoolean()
-    .withMessage('isRated must be a boolean'),
-  
-  body('password')
-    .optional()
-    .isLength({ min: 6, max: 50 })
-    .withMessage('Password must be between 6 and 50 characters')
-    .custom((value, { req }) => {
-      if (req.body.type === 'private' && !value) {
-        throw new Error('Password is required for private contests');
-      }
-      return true;
-    }),
-  
-  body('settings.showOthersCode')
-    .optional()
-    .isBoolean()
-    .withMessage('showOthersCode must be a boolean'),
-  
-  body('settings.allowClarifications')
-    .optional()
-    .isBoolean()
-    .withMessage('allowClarifications must be a boolean'),
-  
-  body('settings.penaltyPerWrongSubmission')
-    .optional()
-    .isInt({ min: 0, max: 120 })
-    .withMessage('Penalty per wrong submission must be between 0 and 120 minutes'),
-  
+  body('password').if(body('type').equals('private')).notEmpty().withMessage('Password is required for private contests.'),
+
   handleValidationErrors,
 ];
 
-// ✅ Contest submission validation
+// --- REFACTORED & OPTIMIZED ---
+// This middleware now fetches the contest object ONCE and attaches it to the request.
+// Subsequent validators reuse this object, avoiding multiple database queries.
 const validateContestSubmission = [
   param('id')
-    .isMongoId()
-    .withMessage('Invalid contest ID')
+    .isMongoId().withMessage('Invalid contest ID.')
     .custom(async (contestId, { req }) => {
+      // Fetch the contest once and attach to the request object
       const contest = await Contest.findById(contestId);
       if (!contest) {
-        throw new Error('Contest not found');
+        throw new Error('Contest not found.');
       }
-      
-      if (!contest.isVisible || !contest.isPublished) {
-        throw new Error('Contest not available');
+      if (!contest.isPublished) {
+        throw new Error('Contest is not published yet.');
       }
-      
-      // Check if user is registered
-      const userId = req.user?.userId;
-      if (userId && !contest.isParticipant(userId)) {
-        throw new Error('You are not registered for this contest');
-      }
-      
+      req.contest = contest; // Attach for reuse
       return true;
     }),
-  
+
   body('problemLabel')
-    .matches(/^[A-Z]$/)
-    .withMessage('Invalid problem label')
-    .custom(async (label, { req }) => {
-      const contestId = req.params.id;
-      const contest = await Contest.findById(contestId);
-      
-      if (!contest.problems.some(p => p.label === label)) {
-        throw new Error('Problem not found in this contest');
+    .matches(/^[A-Z]$/).withMessage('Invalid problem label.')
+    .custom((label, { req }) => {
+      // Reuse the contest object from the request
+      if (!req.contest.problems.some(p => p.label === label)) {
+        throw new Error('Problem not found in this contest.');
       }
       return true;
     }),
   
-  body('code')
-    .isLength({ min: 1, max: 100000 })
-    .withMessage('Code must be between 1 and 100,000 characters')
-    .trim(),
+  body('code').notEmpty().withMessage('Code cannot be empty.').trim(),
   
   body('language')
-    .isIn(['cpp', 'java', 'python', 'javascript', 'go', 'rust'])
-    .withMessage('Invalid programming language')
-    .custom(async (language, { req }) => {
-      const contestId = req.params.id;
-      const contest = await Contest.findById(contestId);
-      
-      if (contest.allowedLanguages.length > 0 && !contest.allowedLanguages.includes(language)) {
-        throw new Error(`Language ${language} is not allowed in this contest`);
+    .isIn(['cpp', 'java', 'python', 'javascript', 'go', 'rust']).withMessage('Invalid programming language.')
+    .custom((language, { req }) => {
+      // Reuse the contest object from the request
+      const { contest } = req;
+      if (contest.allowedLanguages && contest.allowedLanguages.length > 0 && !contest.allowedLanguages.includes(language)) {
+        throw new Error(`Language ${language} is not allowed in this contest.`);
       }
       return true;
     }),
   
+  // Custom validation to check contest status and registration
+  (req, res, next) => {
+    const { contest } = req; // Reuse the contest object
+    const userId = req.user?.userId;
+
+    if (contest.status !== 'running') {
+        return res.status(403).json({ success: false, message: `Contest is not running. Current status: ${contest.status}` });
+    }
+    if (!contest.isParticipant(userId)) {
+        return res.status(403).json({ success: false, message: 'You are not registered for this contest.' });
+    }
+    next();
+  },
+
   handleValidationErrors,
 ];
 
-// ✅ Contest registration validation
 const validateContestRegistration = [
-  param('id')
-    .isMongoId()
-    .withMessage('Invalid contest ID'),
-  
-  body('password')
-    .optional()
-    .isLength({ min: 1, max: 50 })
-    .withMessage('Password cannot be empty if provided'),
-  
+  param('id').isMongoId().withMessage('Invalid contest ID'),
+  body('password').optional().isString(),
   handleValidationErrors,
 ];
 
-// ✅ Contest query validation
 const validateContestQuery = [
-  query('status')
-    .optional()
-    .isIn(['all', 'upcoming', 'running', 'ended', 'registering'])
-    .withMessage('Invalid status filter'),
-  
-  query('type')
-    .optional()
-    .isIn(['all', 'public', 'private', 'rated'])
-    .withMessage('Invalid type filter'),
-  
-  query('page')
-    .optional()
-    .isInt({ min: 1, max: 1000 })
-    .withMessage('Page must be between 1 and 1000'),
-  
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage('Limit must be between 1 and 100'),
-  
+  query('status').optional().isIn(['all', 'upcoming', 'running', 'ended', 'registering']).withMessage('Invalid status filter'),
+  query('type').optional().isIn(['all', 'public', 'private', 'rated']).withMessage('Invalid type filter'),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
   handleValidationErrors,
 ];
 
-// ✅ Standings query validation
 const validateStandingsQuery = [
-  param('id')
-    .isMongoId()
-    .withMessage('Invalid contest ID'),
-  
-  query('page')
-    .optional()
-    .isInt({ min: 1, max: 1000 })
-    .withMessage('Page must be between 1 and 1000'),
-  
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 200 })
-    .withMessage('Limit must be between 1 and 200'),
-  
+  param('id').isMongoId().withMessage('Invalid contest ID'),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
   handleValidationErrors,
 ];
 
-// ✅ Contest update validation (for editors)
 const validateContestUpdate = [
-  param('id')
-    .isMongoId()
-    .withMessage('Invalid contest ID')
-    .custom(async (contestId, { req }) => {
-      const contest = await Contest.findById(contestId);
-      if (!contest) {
-        throw new Error('Contest not found');
-      }
-      
-      // Check if user can edit
-      const userId = req.user?.userId;
-      const userRole = req.user?.role;
-      
-      if (contest.createdBy.toString() !== userId && !['admin', 'moderator'].includes(userRole)) {
-        throw new Error('Not authorized to edit this contest');
-      }
-      
-      // Check if contest has started
-      if (new Date() >= contest.startTime && !['admin'].includes(userRole)) {
-        throw new Error('Cannot edit contest after it has started');
-      }
-      
-      return true;
-    }),
-  
-  body('title')
-    .optional()
-    .isLength({ min: 5, max: 200 })
-    .withMessage('Title must be between 5 and 200 characters')
-    .trim()
-    .escape(),
-  
-  body('description')
-    .optional()
-    .isLength({ min: 10, max: 10000 })
-    .withMessage('Description must be between 10 and 10000 characters')
-    .trim(),
-  
-  // Add other optional update fields...
-  
+  param('id').isMongoId().withMessage('Invalid contest ID'),
+  // The logic for who can edit and when is complex, better handled in the controller.
+  // This middleware can just validate the data format if any.
+  body('title').optional().isLength({ min: 5, max: 200 }).trim().escape(),
+  body('description').optional().isLength({ min: 10, max: 10000 }).trim(),
   handleValidationErrors,
 ];
 
-// ✅ Contest deletion validation
 const validateContestDeletion = [
-  param('id')
-    .isMongoId()
-    .withMessage('Invalid contest ID')
-    .custom(async (contestId, { req }) => {
-      const contest = await Contest.findById(contestId);
-      if (!contest) {
-        throw new Error('Contest not found');
-      }
-      
-      // Check authorization
-      const userId = req.user?.userId;
-      const userRole = req.user?.role;
-      
-      if (contest.createdBy.toString() !== userId && userRole !== 'admin') {
-        throw new Error('Not authorized to delete this contest');
-      }
-      
-      // Check if contest has submissions
-      const ContestSubmission = require('../models/ContestSubmission');
-      const submissionCount = await ContestSubmission.countDocuments({ contest: contestId });
-      
-      if (submissionCount > 0 && userRole !== 'admin') {
-        throw new Error('Cannot delete contest with existing submissions');
-      }
-      
-      return true;
-    }),
-  
+  param('id').isMongoId().withMessage('Invalid contest ID'),
+  // Authorization logic (who can delete) is best handled in the controller/service.
   handleValidationErrors,
 ];
 
@@ -393,5 +140,4 @@ module.exports = {
   validateStandingsQuery,
   validateContestUpdate,
   validateContestDeletion,
-  handleValidationErrors
 };

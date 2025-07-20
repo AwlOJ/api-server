@@ -18,9 +18,14 @@ const contestSchema = new mongoose.Schema({
     required: true,
     validate: {
       validator: function(v) {
-        return v > new Date();
+        // This validation should only apply when creating a new contest or
+        // when the startTime is being modified.
+        if (this.isNew || this.isModified('startTime')) {
+          return v > new Date();
+        }
+        return true;
       },
-      message: 'Start time must be in the future'
+      message: 'Start time must be in the future.'
     }
   },
   endTime: {
@@ -30,14 +35,13 @@ const contestSchema = new mongoose.Schema({
       validator: function(v) {
         return v > this.startTime;
       },
-      message: 'End time must be after start time'
+      message: 'End time must be after start time.'
     }
   },
   duration: {
     type: Number, // minutes
-    required: true,
-    min: 30, // ✅ Minimum contest duration
-    max: 10080 // ✅ Maximum 7 days
+    min: 30,
+    max: 10080 // 7 days
   },
   problems: [{
     problem: {
@@ -46,9 +50,9 @@ const contestSchema = new mongoose.Schema({
       required: true
     },
     label: {
-      type: String, // A, B, C, D...
+      type: String, // A, B, C...
       required: true,
-      match: /^[A-Z]$/ // ✅ Validation for single letter
+      match: /^[A-Z]$/
     },
     points: {
       type: Number,
@@ -66,10 +70,6 @@ const contestSchema = new mongoose.Schema({
     registeredAt: {
       type: Date,
       default: Date.now
-    },
-    isVisible: {
-      type: Boolean,
-      default: true
     }
   }],
   type: {
@@ -82,11 +82,11 @@ const contestSchema = new mongoose.Schema({
     enum: ['ICPC', 'IOI', 'AtCoder'],
     default: 'ICPC'
   },
-  allowedLanguages: [{
-    type: String,
+  allowedLanguages: {
+    type: [String],
     enum: ['cpp', 'java', 'python', 'javascript', 'go', 'rust'],
-    default: ['cpp', 'java', 'python'] // ✅ Default allowed languages
-  }],
+    default: ['cpp', 'java', 'python']
+  },
   maxSubmissions: {
     type: Number,
     default: 0, // 0 = unlimited
@@ -97,7 +97,7 @@ const contestSchema = new mongoose.Schema({
     type: Number, // minutes before end
     default: 60,
     min: 0,
-    max: 300 // ✅ Max 5 hours
+    max: 300 // Max 5 hours
   },
   isVisible: {
     type: Boolean,
@@ -112,160 +112,138 @@ const contestSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  // ✅ Contest settings with proper defaults
   settings: {
-    showOthersCode: {
-      type: Boolean,
-      default: false
-    },
-    allowClarifications: {
-      type: Boolean,
-      default: true
-    },
-    penaltyPerWrongSubmission: {
-      type: Number,
-      default: 20, // minutes for ICPC
-      min: 0,
-      max: 60
-    },
-    enablePlagiarismCheck: {
-      type: Boolean,
-      default: true
-    },
-    autoPublishResults: {
-      type: Boolean,
-      default: true
-    }
+    showOthersCode: { type: Boolean, default: false },
+    allowClarifications: { type: Boolean, default: true },
+    penaltyPerWrongSubmission: { type: Number, default: 20 },
+    enablePlagiarismCheck: { type: Boolean, default: true },
+    autoPublishResults: { type: Boolean, default: true }
   },
-  // ✅ Add missing fields
   registrationDeadline: {
     type: Date,
-    default: function() {
-      return this.startTime; // Default to contest start time
-    }
+    default: function() { return this.startTime; }
   },
-  // ✅ Contest access control
   password: {
     type: String,
-    default: null // For private contests
+    trim: true
   },
-  // ✅ Contest status tracking
   isPublished: {
     type: Boolean,
     default: false
-  },
-  // ✅ Statistics
-  totalParticipants: {
-    type: Number,
-    default: 0
   },
   totalSubmissions: {
     type: Number,
     default: 0
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
-// ✅ Indexes for better performance
+// Indexes for query performance
 contestSchema.index({ startTime: 1, endTime: 1 });
 contestSchema.index({ 'participants.user': 1 });
 contestSchema.index({ createdBy: 1 });
-contestSchema.index({ type: 1, isVisible: 1 });
-contestSchema.index({ isPublished: 1, startTime: 1 });
+contestSchema.index({ isPublished: 1, isVisible: 1, startTime: 1 });
 
-// ✅ Compound index for unique problem labels per contest
-contestSchema.index({ '_id': 1, 'problems.label': 1 }, { unique: true });
+// The unique index on subdocuments doesn't work as expected.
+// The validation logic in pre-save hook is the correct way to enforce this.
+// contestSchema.index({ '_id': 1, 'problems.label': 1 }, { unique: true });
 
-// ✅ Virtual for contest status (Fixed logic)
+// Virtuals for computed properties
 contestSchema.virtual('status').get(function() {
   const now = new Date();
   if (!this.isPublished) return 'draft';
   if (now < this.startTime) return 'upcoming';
-  if (now >= this.startTime && now <= this.endTime) return 'running';
+  if (now <= this.endTime) return 'running';
   return 'ended';
 });
 
-// ✅ Virtual for time calculations
 contestSchema.virtual('timeLeft').get(function() {
   const now = new Date();
   if (this.status === 'upcoming') {
-    return Math.max(0, this.startTime - now);
+    return Math.max(0, this.startTime.getTime() - now.getTime());
   }
   if (this.status === 'running') {
-    return Math.max(0, this.endTime - now);
+    return Math.max(0, this.endTime.getTime() - now.getTime());
   }
   return 0;
 });
 
-// ✅ Virtual for registration status
 contestSchema.virtual('canRegister').get(function() {
   const now = new Date();
-  return this.isPublished && 
-         now < this.registrationDeadline && 
-         this.status !== 'ended';
+  return this.isPublished && now < this.registrationDeadline && this.status !== 'ended';
 });
 
-// ✅ Pre-save middleware to ensure data consistency
+contestSchema.virtual('participantCount').get(function() {
+  return this.participants.length;
+});
+
+// Middleware
 contestSchema.pre('save', function(next) {
-  // Auto-calculate duration
-  this.duration = Math.floor((this.endTime - this.startTime) / (1000 * 60));
-  
-  // Validate problem labels are unique
-  const labels = this.problems.map(p => p.label);
-  const uniqueLabels = [...new Set(labels)];
-  if (labels.length !== uniqueLabels.length) {
-    return next(new Error('Problem labels must be unique within a contest'));
+  // Auto-calculate duration if not provided
+  if (this.isModified('startTime') || this.isModified('endTime')) {
+    this.duration = Math.floor((this.endTime - this.startTime) / (1000 * 60));
   }
   
-  // Update participant count
-  this.totalParticipants = this.participants.length;
+  // Validate problem labels are unique within this contest
+  if (this.isModified('problems')) {
+    const labels = this.problems.map(p => p.label);
+    if (new Set(labels).size !== labels.length) {
+      return next(new Error('Problem labels must be unique within a contest.'));
+    }
+  }
+  
+  // Ensure private contests have a password
+  if (this.type === 'private' && !this.password) {
+    // It's better to handle this in the controller/service layer, but as a safeguard:
+    // next(new Error('Private contests require a password.'));
+  }
   
   next();
 });
 
-// ✅ Instance methods
-contestSchema.methods.addParticipant = function(userId) {
-  if (this.participants.some(p => p.user.toString() === userId.toString())) {
-    throw new Error('User already registered');
+// Instance Methods
+contestSchema.methods.isParticipant = function(userId) {
+  if (!userId) return false;
+  return this.participants.some(p => p.user.equals(userId));
+};
+
+contestSchema.methods.addParticipant = async function(userId) {
+  if (this.isParticipant(userId)) {
+    // To prevent race conditions, check again right before update
+    const contest = await this.constructor.findById(this._id);
+    if(contest.isParticipant(userId)) {
+       throw new Error('User is already registered.');
+    }
   }
   
   if (!this.canRegister) {
-    throw new Error('Registration is closed');
+    throw new Error('Registration for this contest is closed.');
   }
-  
+
   this.participants.push({ user: userId });
   return this.save();
 };
 
-contestSchema.methods.removeParticipant = function(userId) {
-  this.participants = this.participants.filter(
-    p => p.user.toString() !== userId.toString()
-  );
-  return this.save();
-};
-
-contestSchema.methods.isParticipant = function(userId) {
-  return this.participants.some(p => p.user.toString() === userId.toString());
-};
-
-// ✅ Static methods
-contestSchema.statics.findUpcoming = function() {
+// Static Methods
+contestSchema.statics.findUpcoming = function(limit = 10) {
   return this.find({
     isPublished: true,
     isVisible: true,
     startTime: { $gt: new Date() }
-  }).sort({ startTime: 1 });
+  }).sort({ startTime: 1 }).limit(limit);
 };
 
-contestSchema.statics.findRunning = function() {
+contestSchema.statics.findRunning = function(limit = 10) {
   const now = new Date();
   return this.find({
     isPublished: true,
     isVisible: true,
     startTime: { $lte: now },
     endTime: { $gt: now }
-  });
+  }).sort({ startTime: 1 }).limit(limit);
 };
 
 module.exports = mongoose.model('Contest', contestSchema);

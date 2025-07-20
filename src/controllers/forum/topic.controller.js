@@ -1,57 +1,45 @@
+const mongoose = require('mongoose');
 const Topic = require('../../models/forum/Topic');
 const Category = require('../../models/forum/Category');
+
+// Helper function to avoid duplicating sort logic
+const getSortOption = (sort) => {
+  switch (sort) {
+    case 'newest':
+      return { createdAt: -1 };
+    case 'popular':
+      return { viewCount: -1 };
+    case 'replies':
+      return { replyCount: -1 };
+    default: // 'lastActivity'
+      return { lastActivity: -1 };
+  }
+};
 
 // GET /api/forum/topics
 const getTopics = async (req, res) => {
   try {
     const { page = 1, limit = 20, sort = 'lastActivity', categoryId } = req.query;
     
-    let query = {};
-    
+    let query = { category: { $ne: null, $exists: true } };
     if (categoryId) {
-      const categoryExists = await Category.findById(categoryId);
-      if (!categoryExists) {
-        return res.status(404).json({
-          success: false,
-          message: 'Category not found'
-        });
-      }
-      
-      query = { 
-        category: categoryId,
-        $expr: { $ne: ['$category', null] }
-      };
-    } else {
-      query = { 
-        category: { $ne: null, $exists: true }
-      };
+      query.category = categoryId;
     }
     
-    // Define sort options
-    let sortOption = {};
-    switch (sort) {
-      case 'newest':
-        sortOption = { createdAt: -1 };
-        break;
-      case 'popular':
-        sortOption = { viewCount: -1 };
-        break;
-      case 'replies':
-        sortOption = { replyCount: -1 };
-        break;
-      default:
-        sortOption = { lastActivity: -1 };
-    }
+    const sortOption = getSortOption(sort);
     
-    const topics = await Topic.find(query)
+    const topicsPromise = Topic.find(query)
       .populate('author', 'username')
       .populate('category', 'name slug')
       .sort(sortOption)
       .limit(limit * 1)
       .skip((page - 1) * limit)
+      .lean() // Use lean for faster read-only queries
       .exec();
 
-    const count = await Topic.countDocuments(query);
+    const countPromise = Topic.countDocuments(query);
+    
+    const [topics, count] = await Promise.all([topicsPromise, countPromise]);
 
     res.json({
       success: true,
@@ -66,6 +54,7 @@ const getTopics = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Get topics error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
@@ -75,8 +64,7 @@ const getTopicsByCategorySlug = async (req, res) => {
     const { slug } = req.params;
     const { page = 1, limit = 20, sort = 'lastActivity' } = req.query;
     
-    // Find category by slug
-    const category = await Category.findOne({ slug });
+    const category = await Category.findOne({ slug }).lean();
     if (!category) {
       return res.status(404).json({
         success: false,
@@ -84,36 +72,21 @@ const getTopicsByCategorySlug = async (req, res) => {
       });
     }
     
-    // Define sort options
-    let sortOption = {};
-    switch (sort) {
-      case 'newest':
-        sortOption = { createdAt: -1 };
-        break;
-      case 'popular':
-        sortOption = { viewCount: -1 };
-        break;
-      case 'replies':
-        sortOption = { replyCount: -1 };
-        break;
-      default:
-        sortOption = { lastActivity: -1 };
-    }
+    const query = { category: category._id };
+    const sortOption = getSortOption(sort);
     
-    const query = { 
-      category: category._id,
-      $expr: { $ne: ['$category', null] }
-    };
-    
-    const topics = await Topic.find(query)
+    const topicsPromise = Topic.find(query)
       .populate('author', 'username')
       .populate('category', 'name slug')
       .sort(sortOption)
       .limit(limit * 1)
       .skip((page - 1) * limit)
+      .lean()
       .exec();
 
-    const count = await Topic.countDocuments(query);
+    const countPromise = Topic.countDocuments(query);
+    
+    const [topics, count] = await Promise.all([topicsPromise, countPromise]);
 
     res.json({
       success: true,
@@ -134,41 +107,36 @@ const getTopicsByCategorySlug = async (req, res) => {
   }
 };
 
-// GET /api/forum/topics/search
 const searchTopics = async (req, res) => {
   try {
     const { q, categoryId, tags, page = 1, limit = 20 } = req.query;
     
-    // Build search query
     const query = {};
-    
-    // Text search on title and content
     if (q) {
       query.$or = [
         { title: { $regex: q, $options: 'i' } },
         { content: { $regex: q, $options: 'i' } }
       ];
     }
-    
-    // Category filter
     if (categoryId) {
       query.category = categoryId;
     }
-    
-    // Tags filter
     if (tags) {
       const tagArray = tags.split(',').map(tag => tag.trim());
       query.tags = { $in: tagArray };
     }
     
-    const topics = await Topic.find(query)
+    const topicsPromise = Topic.find(query)
       .populate('author', 'username')
       .populate('category', 'name slug')
       .sort({ lastActivity: -1 })
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit)
+      .lean();
     
-    const count = await Topic.countDocuments(query);
+    const countPromise = Topic.countDocuments(query);
+    
+    const [topics, count] = await Promise.all([topicsPromise, countPromise]);
     
     res.json({
       success: true,
@@ -184,34 +152,41 @@ const searchTopics = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error(error);
+    console.error('Search topics error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
 
-// GET /api/forum/topics/:slug
 const getTopicBySlug = async (req, res) => {
     try {
-        const topic = await Topic.findOne({ slug: req.params.slug }).populate('author', 'username');
+        const topic = await Topic.findOne({ slug: req.params.slug })
+          .populate('author', 'username')
+          .populate('category', 'name slug');
+
         if (!topic) {
             return res.status(404).json({ success: false, message: 'Topic not found' });
         }
-        topic.viewCount += 1;
-        await topic.save();
+        
+        // Increment view count without waiting for it to finish for faster response
+        Topic.updateOne({ _id: topic._id }, { $inc: { viewCount: 1 } }).exec();
+        
         res.json({ success: true, data: topic });
     } catch (error) {
+        console.error('Get topic by slug error:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
 
-// POST /api/forum/topics
 const createTopic = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const { title, content, categoryId, tags } = req.body;
     const author = req.user.userId;
 
-    const categoryExists = await Category.findById(categoryId);
-    if (!categoryExists) {
+    const category = await Category.findById(categoryId).session(session);
+    if (!category) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -227,17 +202,27 @@ const createTopic = async (req, res) => {
       tags,
     });
 
-    await newTopic.save();
+    await newTopic.save({ session });
     
-    await Category.findByIdAndUpdate(categoryId, { 
-      $inc: { topicCount: 1 }, 
-      lastTopic: newTopic._id 
-    });
+    category.topicCount += 1;
+    category.lastTopic = newTopic._id;
+    await category.save({ session });
+
+    await session.commitTransaction();
+
+    // Populate author for the response
+    await newTopic.populate('author', 'username');
 
     res.status(201).json({ success: true, data: newTopic });
   } catch (error) {
+    await session.abortTransaction();
     console.error('Create topic error:', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     res.status(500).json({ success: false, message: 'Server Error' });
+  } finally {
+    session.endSession();
   }
 };
 
