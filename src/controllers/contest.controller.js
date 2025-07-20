@@ -1,9 +1,11 @@
 const Contest = require('../models/Contest');
 const Problem = require('../models/Problem');
+const Submission = require('../models/Submission');
 const ContestSubmission = require('../models/ContestSubmission');
 const Standings = require('../models/Standings');
 const StandingsService = require('../services/contest/standings.service');
 const mongoose = require('mongoose');
+const { addSubmissionJob } = require('../services/queue.service');
 
 // GET /api/contests
 const getContests = async (req, res) => {
@@ -398,6 +400,208 @@ const publishContest = async (req, res) => {
 // ✅ Rest of the methods remain similar but with better error handling...
 // (submitToContest, getStandings methods would follow similar patterns)
 
+const submitToContest = async (req, res) => {
+  const session = await mongoose.startSession();
+  
+  try {
+    await session.startTransaction();
+    
+    const { id: contestId } = req.params;
+    const { problemLabel, code, language } = req.body;
+    const userId = req.user.userId;
+    
+    // ✅ Validate contest and get problem details
+    const contest = await Contest.findById(contestId)
+      .populate('problems.problem')
+      .session(session);
+    
+    if (!contest || !contest.isVisible || !contest.isPublished) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Contest not found'
+      });
+    }
+    
+    // ✅ Check contest timing
+    const now = new Date();
+    if (now < contest.startTime) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Contest has not started yet'
+      });
+    }
+    
+    if (now > contest.endTime) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Contest has ended'
+      });
+    }
+    
+    // ✅ Check if user is registered
+    if (!contest.isParticipant(userId)) {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        message: 'You are not registered for this contest'
+      });
+    }
+    
+    // ✅ Find the problem by label
+    const contestProblem = contest.problems.find(p => p.label === problemLabel);
+    if (!contestProblem) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Problem not found in this contest'
+      });
+    }
+    
+    const problem = contestProblem.problem;
+    
+    // ✅ Check submission limits
+    if (contest.maxSubmissions > 0) {
+      const submissionCount = await ContestSubmission.countDocuments({
+        user: userId,
+        contest: contestId,
+        problem: problem._id
+      }).session(session);
+      
+      if (submissionCount >= contest.maxSubmissions) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: `Maximum submissions (${contest.maxSubmissions}) reached for this problem`
+        });
+      }
+    }
+    
+    // ✅ Check allowed languages
+    if (contest.allowedLanguages.length > 0 && !contest.allowedLanguages.includes(language)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Language ${language} is not allowed in this contest`
+      });
+    }
+    
+    // ✅ Calculate submission time (minutes from contest start)
+    const submissionTime = Math.floor((now - contest.startTime) / (1000 * 60));
+    
+    // ✅ Get attempt number for this user+problem in this contest
+    const attemptNumber = await ContestSubmission.countDocuments({
+      user: userId,
+      contest: contestId,
+      problem: problem._id
+    }).session(session) + 1;
+    
+    // ✅ Create regular submission first
+    const submission = new Submission({
+      userId,
+      problemId: problem._id,
+      code,
+      language,
+      status: 'In Queue'
+    });
+    
+    await submission.save({ session });
+    
+    // ✅ Create contest submission
+    const contestSubmission = new ContestSubmission({
+      contest: contestId,
+      user: userId,
+      problem: problem._id,
+      problemLabel: problemLabel,
+      submission: submission._id,
+      submissionTime: submissionTime,
+      attemptNumber: attemptNumber,
+      points: 0,
+      penalty: 0,
+      isAccepted: false
+    });
+    
+    await contestSubmission.save({ session });
+    
+    // ✅ Update contest statistics
+    await Contest.findByIdAndUpdate(
+      contestId,
+      { $inc: { totalSubmissions: 1 } },
+      { session }
+    );
+    
+    // ✅ Commit transaction before doing external operations
+    await session.commitTransaction();
+    
+    // ✅ Add to judge queue AFTER transaction commits (external operation)
+    try {
+      await addSubmissionJob(submission._id, {
+        isContest: true,
+        contestId: contestId,
+        contestSubmissionId: contestSubmission._id
+      });
+    } catch (queueError) {
+      console.error('Failed to add to judge queue:', queueError);
+      // Don't fail the request if queue fails, just log it
+    }
+    
+    // ✅ Emit real-time update (external operation)
+    try {
+      if (global.io) {
+        global.io.to(`contest_${contestId}`).emit('new_submission', {
+          contestId,
+          problemLabel,
+          username: req.user.username,
+          submissionTime,
+          language,
+          timestamp: now
+        });
+      }
+    } catch (socketError) {
+      console.error('Failed to emit socket event:', socketError);
+      // Don't fail the request if socket fails
+    }
+    
+    res.status(202).json({
+      success: true,
+      data: {
+        submissionId: submission._id,
+        contestSubmissionId: contestSubmission._id,
+        problemLabel,
+        language,
+        submissionTime,
+        attemptNumber,
+        contest: {
+          id: contestId,
+          title: contest.title
+        },
+        problem: {
+          id: problem._id,
+          title: problem.title
+        }
+      },
+      message: 'Contest submission received and added to judge queue'
+    });
+    
+  } catch (error) {
+    // ✅ Only abort if transaction is still active
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    
+    console.error('Contest submission error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Server Error'
+    });
+  } finally {
+    // ✅ Always end session, no abort here
+    await session.endSession();
+  }
+};
+
 module.exports = {
   getContests,
   getContest,
@@ -433,9 +637,5 @@ module.exports = {
       res.status(500).json({ success: false, message: 'Server Error' });
     }
   },
-  submitToContest: async (req, res) => {
-    // ✅ Similar improvements with better validation and error handling
-    // Implementation would be similar to original but with enhanced checks
-    res.status(501).json({ message: 'Implementation pending in next iteration' });
-  }
+  submitToContest
 };
