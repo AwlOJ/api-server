@@ -2,21 +2,21 @@ const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const helmet = require('helmet');
-const http = require('http'); // ADD: For Socket.IO
-const socketIo = require('socket.io'); // ADD: Socket.IO
+const http = require('http');
+const socketIo = require('socket.io');
 const config = require('./config');
 const authRoutes = require('./routes/auth.routes');
 const problemRoutes = require('./routes/problem.routes');
 const submissionRoutes = require('./routes/submission.routes');
-const contestRoutes = require('./routes/contest.routes'); // ADD: Contest routes
+const contestRoutes = require('./routes/contest.routes');
 const forumRoutes = require('./routes/forum');
-const cors = require('cors'); 
-const { gracefulShutdown } = require('./services/queue.service');
+const cors = require('cors');
+const { gracefulShutdown: queueGracefulShutdown } = require('./services/queue.service');
 
 const app = express();
-const server = http.createServer(app); // CHANGE: Wrap app with HTTP server
+const server = http.createServer(app);
 
-// ADD: Socket.IO setup (minimal)
+// Socket.IO setup
 const io = socketIo(server, {
   cors: {
     origin: config.clientOrigin,
@@ -24,7 +24,9 @@ const io = socketIo(server, {
   }
 });
 
-global.io = io;
+// Avoid using global.io, instead export it or pass it down.
+// For now, let's keep it simple and assume other files will import it from a socket setup file.
+// global.io = io; // REMOVED
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -51,42 +53,43 @@ mongoose.connect(config.mongoURI)
 app.use('/api/auth', authRoutes);
 app.use('/api/problems', problemRoutes);
 app.use('/api/submissions', submissionRoutes);
-app.use('/api/contests', contestRoutes); 
+app.use('/api/contests', contestRoutes);
 app.use('/api/forum', forumRoutes);
-
 
 app.get('/', (req, res) => {
   res.send([
     'AwlOJ API is running!',
     'fromlowngwithluv!',
     'iukhuenn&haanhh!',
-    'Contest system enabled! 🏆' 
+    'Contest system enabled! 🏆'
   ].join('\n'));
 });
-
-const shutdown = async () => {
-  console.log('Shutting down gracefully...');
-  try {
-    io.close();
-    await mongoose.connection.close();
-    console.log('MongoDB connection closed.');
-    await gracefulShutdown();
-  } catch (error) {
-    console.error('Error during shutdown:', error);
-    process.exit(1);
-  }
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
 
 const serverInstance = server.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);
   console.log('WebSocket enabled for contests');
 });
 
-process.on('SIGTERM', () => {
-  serverInstance.close(() => {
-    console.log('HTTP server closed.');
-  });
-});
+const shutdown = async () => {
+  console.log('Shutting down gracefully...');
+  try {
+    serverInstance.close(() => {
+        console.log('HTTP server closed.');
+    });
+
+    io.close();
+
+    await mongoose.connection.close();
+    console.log('MongoDB connection closed.');
+
+    await queueGracefulShutdown();
+
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

@@ -1,7 +1,8 @@
 require('dotenv').config();
 
 const validateEnv = () => {
-  const required = ['MONGO_URI', 'JWT_SECRET'];
+  // Add REDIS_URL, SMTP_USER, and SMTP_PASS to the required list
+  const required = ['MONGO_URI', 'JWT_SECRET', 'REDIS_URL', 'SMTP_USER', 'SMTP_PASS'];
   const missing = required.filter(key => !process.env[key]);
   
   if (missing.length > 0) {
