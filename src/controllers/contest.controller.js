@@ -13,8 +13,6 @@ const getContests = async (req, res) => {
     const { status = 'all', page = 1, limit = 20, type = 'all' } = req.query;
     let filter = { isVisible: true, isPublished: true };
     
-    // This logic is fine in the controller as it's query-specific
-    // and doesn't involve business rule validation.
     const now = new Date();
     switch (status) {
       case 'upcoming':
@@ -38,18 +36,23 @@ const getContests = async (req, res) => {
     }
     
     const contestsPromise = Contest.find(filter)
-      .populate('createdBy', 'username')
-      .populate('problems.problem', 'title difficulty')
+      .populate('createdBy', 'username role') // Populated createdBy
+      .populate({
+        path: 'participants',
+        populate: {
+          path: 'user',
+          select: 'username'
+        }
+       })
       .sort({ startTime: status === 'ended' ? -1 : 1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
-      .lean(); // Using lean() is great for performance.
+      .lean();
       
     const totalPromise = Contest.countDocuments(filter);
     
     const [contests, total] = await Promise.all([contestsPromise, totalPromise]);
     
-    // Since we used .lean(), we don't have virtuals. Manually adding them is correct.
     const contestsWithStatus = contests.map(contest => {
         const contestObj = { ...contest };
         const now = new Date();
@@ -94,11 +97,22 @@ const getContest = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid contest ID' });
     }
     
-    // We don't use .lean() here because we need the full Mongoose document
-    // with its methods and virtuals.
     const contest = await Contest.findById(id)
-      .populate('createdBy', 'username')
-      .populate('problems.problem', 'title description difficulty timeLimit memoryLimit');
+      .populate('createdBy', 'username role email') // Populated createdBy with more fields
+      .populate({
+         path: 'problems',
+         populate: {
+           path: 'problem',
+           select: 'title difficulty'
+         }
+      })
+      .populate({
+        path: 'participants',
+        populate: {
+          path: 'user',
+          select: 'username'
+        }
+       });
     
     if (!contest) {
       return res.status(404).json({ success: false, message: 'Contest not found' });
@@ -116,11 +130,8 @@ const getContest = async (req, res) => {
     
     const isRegistered = contest.isParticipant(userId);
     
-    // Using toObject() allows us to manipulate the object before sending.
-    // It correctly includes virtuals by default because of the schema options.
     let contestData = contest.toObject();
     
-    // Hide problem details if contest hasn't started and user is not privileged
     if (contestData.status === 'upcoming' && !isCreator && !isRegistered) {
       contestData.problems = contestData.problems.map(p => ({
         label: p.label,
@@ -133,7 +144,6 @@ const getContest = async (req, res) => {
       }));
     }
     
-    // Add computed fields for the client
     contestData.isRegistered = isRegistered;
     contestData.isCreator = isCreator;
     
@@ -156,7 +166,6 @@ const createContest = async (req, res) => {
   try {
     const { problems, ...restOfBody } = req.body;
     
-    // 1. Basic validation for problem structure
     if (!problems || !Array.isArray(problems) || problems.length === 0) {
         return res.status(400).json({
             success: false, message: 'Contest must have at least one problem.'
@@ -171,11 +180,10 @@ const createContest = async (req, res) => {
         });
     }
 
-    // 2. Create the contest instance. Mongoose will use defaults for missing fields.
     const contest = new Contest({
       ...restOfBody,
       createdBy: req.user.userId,
-      isPublished: false, // Always start as a draft
+      isPublished: false,
       problems: problems.map(p => ({
         problem: p.problemId,
         label: p.label,
@@ -183,10 +191,8 @@ const createContest = async (req, res) => {
       })),
     });
 
-    // 3. Let Mongoose handle all validation by calling save()
     await contest.save({ session });
     
-    // 4. Initialize standings
     const standings = new Standings({
       contest: contest._id,
       rankings: []
@@ -195,6 +201,7 @@ const createContest = async (req, res) => {
     
     await session.commitTransaction();
     
+    await contest.populate('createdBy', 'username role email');
     await contest.populate('problems.problem', 'title difficulty');
     
     res.status(201).json({
@@ -205,7 +212,6 @@ const createContest = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     
-    // 5. Catch validation errors from the model and send a clean response
     if (error.name === 'ValidationError') {
       return res.status(400).json({ 
         success: false, 
@@ -235,7 +241,6 @@ const registerForContest = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Contest not found' });
     }
     
-    // Use the model's virtual 'canRegister' for cleaner logic
     if (!contest.canRegister) {
       return res.status(400).json({ success: false, message: 'Registration is closed for this contest.' });
     }
@@ -248,7 +253,6 @@ const registerForContest = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Incorrect contest password.' });
     }
     
-    // Use the model method, which encapsulates the logic
     await contest.addParticipant(req.user.userId);
     
     res.json({ success: true, message: 'Successfully registered for the contest.' });
@@ -273,6 +277,9 @@ const publishContest = async (req, res) => {
     
     contest.isPublished = true;
     await contest.save();
+    
+    await contest.populate('createdBy', 'username role email');
+    await contest.populate('problems.problem', 'title difficulty');
     
     res.json({ success: true, data: contest, message: 'Contest published successfully.' });
   } catch (error) {
@@ -315,8 +322,6 @@ const submitToContest = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Problem not found in this contest.' });
     }
     
-    // ... rest of the submission logic from before, which was already good ...
-
     const submissionTime = Math.floor((new Date() - new Date(contest.startTime)) / (1000 * 60));
     const attemptNumber = await ContestSubmission.countDocuments({ user: userId, contest: contestId, problem: contestProblem.problem }).session(session) + 1;
 
@@ -344,11 +349,9 @@ const submitToContest = async (req, res) => {
 
     await session.commitTransaction();
 
-    // External operations after transaction commit
     addSubmissionJob(submission._id, { isContest: true, contestId: contestId, contestSubmissionId: contestSubmission._id })
       .catch(err => console.error(`Failed to add submission ${submission._id} to queue`, err));
 
-    // No need to use global.io
     const io = require('../../sockets');
     if (io) {
         io.to(`contest_${contestId}`).emit('new_submission', {
@@ -382,12 +385,11 @@ const getStandings = async (req, res) => {
       const { id } = req.params;
       const { page = 1, limit = 50 } = req.query;
       
-      // The service already handles invalid contest IDs, but this is a good first check.
       if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ success: false, message: 'Invalid contest ID' });
       }
       
-      const contest = await Contest.findById(id).lean(); // Use lean for a quick check
+      const contest = await Contest.findById(id).lean();
       if (!contest || !contest.isPublished) {
         return res.status(404).json({ success: false, message: 'Contest not found.' });
       }

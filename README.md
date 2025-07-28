@@ -123,6 +123,18 @@ Get current user's submissions (requires auth).
 
 ---
 
+## Contest Routes (`/api/contests`)
+
+*   **GET /contests**: Get a list of all contests.
+*   **GET /contests/:id**: Get details for a specific contest.
+*   **GET /contests/:id/standings**: Get the live standings for a contest.
+*   **POST /contests**: Create a new contest. (Admin only)
+*   **POST /contests/:id/register**: Register the authenticated user for a contest. (Requires auth)
+*   **POST /contests/:id/submit**: Submit a solution to a problem within a contest. (Requires auth)
+*   **POST /contests/:id/publish**: Make a contest visible to users. (Admin only)
+
+---
+
 ## Forum Routes (`/api/forum`)
 
 ### Categories (`/api/forum/categories`)
