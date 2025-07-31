@@ -3,13 +3,14 @@ const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const helmet = require('helmet');
 const http = require('http');
-const socketIo = require('socket.io');
+const { Server } = require('socket.io');
 const config = require('./config');
 const authRoutes = require('./routes/auth.routes');
 const problemRoutes = require('./routes/problem.routes');
 const submissionRoutes = require('./routes/submission.routes');
 const contestRoutes = require('./routes/contest.routes');
 const forumRoutes = require('./routes/forum');
+const internalRoutes = require('./routes/internal.routes'); // Import internal routes
 const cors = require('cors');
 const { gracefulShutdown: queueGracefulShutdown } = require('./services/queue.service');
 
@@ -17,19 +18,27 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.IO setup
-const io = socketIo(server, {
+const io = new Server(server, {
   cors: {
     origin: config.clientOrigin,
     credentials: true
   }
 });
 
-// Avoid using global.io, instead export it or pass it down.
-// For now, let's keep it simple and assume other files will import it from a socket setup file.
-// global.io = io; // REMOVED
+// Make io instance available to routes
+app.set('io', io);
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+  
+  // Join rooms based on subscription
+  socket.on('subscribe_submission', (submissionId) => {
+    socket.join(`submission_${submissionId}`);
+  });
+  
+  socket.on('subscribe_contest', (contestId) => {
+    socket.join(`contest_${contestId}`);
+  });
   
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
@@ -50,24 +59,25 @@ mongoose.connect(config.mongoURI)
     process.exit(1);
   });
 
+// Setup routes
 app.use('/api/auth', authRoutes);
 app.use('/api/problems', problemRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/contests', contestRoutes);
 app.use('/api/forum', forumRoutes);
+app.use('/api/internal', internalRoutes); // Use internal routes
 
 app.get('/', (req, res) => {
   res.send([
     'AwlOJ API is running!',
     'fromlowngwithluv!',
     'iukhuenn&haanhh!',
-    'Contest system enabled! 🏆'
+    'Contest system enabled!'
   ].join('\n'));
 });
 
 const serverInstance = server.listen(config.port, () => {
   console.log(`Server running on port ${config.port}`);
-  console.log('WebSocket enabled for contests');
 });
 
 const shutdown = async () => {
