@@ -2,33 +2,31 @@ const ContestSubmission = require('../../models/ContestSubmission');
 const StandingsService = require('./standings.service');
 const mongoose = require('mongoose');
 
-// ✅ Distributed lock for handling concurrent judge results
 class JudgeIntegration {
   constructor() {
     this.redis = require('ioredis').createClient(process.env.REDIS_URL);
     this.processingSubmissions = new Set();
   }
 
-  // ✅ Main handler with proper locking and error handling
   async handleJudgeResult(submissionId, result) {
+    console.log(`[JudgeIntegration] Received result for submissionId: ${submissionId}`, result); // DEBUG
     const lockKey = `judge_lock:${submissionId}`;
     const lockValue = `${Date.now()}_${Math.random()}`;
     
     try {
-      // ✅ Acquire distributed lock
       const lockAcquired = await this.redis.set(
         lockKey, 
         lockValue, 
-        'EX', 30, 'NX' // 30 second expiry, only if not exists
+        'EX', 30, 'NX'
       );
       
       if (!lockAcquired) {
-        console.log(`Judge result for submission ${submissionId} already being processed`);
+        console.log(`[JudgeIntegration] Lock not acquired for ${submissionId}, already processing.`);
         return;
       }
 
-      // ✅ Prevent duplicate processing
       if (this.processingSubmissions.has(submissionId)) {
+        console.log(`[JudgeIntegration] Duplicate processing detected for ${submissionId}.`);
         return;
       }
       this.processingSubmissions.add(submissionId);
@@ -37,7 +35,6 @@ class JudgeIntegration {
       session.startTransaction();
 
       try {
-        // Find contest submission with proper population
         const contestSubmission = await ContestSubmission.findOne({
           submission: submissionId
         })
@@ -46,27 +43,28 @@ class JudgeIntegration {
         .session(session);
         
         if (!contestSubmission) {
-          console.log(`No contest submission found for submission ${submissionId}`);
-          return; // Not a contest submission, normal behavior
+          console.log(`[JudgeIntegration] No contest submission found for submission ${submissionId}. This might be a regular submission.`);
+          await session.abortTransaction(); // Abort transaction if no contest submission found
+          return;
         }
-        
-        // ✅ Validate contest is still active or in grace period
+        console.log(`[JudgeIntegration] Found contest submission: ${contestSubmission._id}`); // DEBUG
+
         const now = new Date();
         const contest = contestSubmission.contest;
-        const graceEndTime = new Date(contest.endTime.getTime() + 5 * 60 * 1000); // 5 min grace
+        const graceEndTime = new Date(contest.endTime.getTime() + 5 * 60 * 1000);
         
         if (now > graceEndTime) {
-          console.log(`Contest ${contest._id} ended, ignoring late judge result`);
+          console.log(`[JudgeIntegration] Contest ${contest._id} ended, ignoring late judge result.`);
+          await session.abortTransaction();
           return;
         }
         
-        // ✅ Prevent double processing of same result
         if (contestSubmission.isProcessed) {
-          console.log(`Contest submission ${contestSubmission._id} already processed`);
+          console.log(`[JudgeIntegration] Contest submission ${contestSubmission._id} already processed.`);
+          await session.abortTransaction();
           return;
         }
         
-        // ✅ Update contest submission with detailed result tracking
         const updateData = {
           isProcessed: true,
           processedAt: new Date(),
@@ -76,7 +74,6 @@ class JudgeIntegration {
         if (result.status === 'Accepted') {
           updateData.isAccepted = true;
           
-          // ✅ Calculate points based on scoring system
           const problemConfig = contest.problems.find(
             p => p.problem.toString() === contestSubmission.problem.toString()
           );
@@ -86,11 +83,9 @@ class JudgeIntegration {
           } else if (contest.scoringSystem === 'ICPC') {
             updateData.points = 1;
           } else if (contest.scoringSystem === 'AtCoder') {
-            // AtCoder scoring with time penalty
             updateData.points = problemConfig?.points || 100;
           }
           
-          // ✅ Calculate penalty based on scoring system
           if (contest.scoringSystem === 'ICPC') {
             const wrongAttempts = contestSubmission.attemptNumber - 1;
             updateData.penalty = contestSubmission.submissionTime + 
@@ -99,7 +94,7 @@ class JudgeIntegration {
             const wrongAttempts = contestSubmission.attemptNumber - 1;
             updateData.penalty = contestSubmission.submissionTime + (wrongAttempts * 5);
           } else {
-            updateData.penalty = 0; // IOI typically no penalty
+            updateData.penalty = 0;
           }
         } else {
           updateData.isAccepted = false;
@@ -107,55 +102,50 @@ class JudgeIntegration {
           updateData.penalty = 0;
         }
         
-        // ✅ Update contest submission atomically
-        await ContestSubmission.findByIdAndUpdate(
+        console.log(`[JudgeIntegration] Preparing to update ContestSubmission ${contestSubmission._id} with data:`, updateData); // DEBUG
+
+        const updatedSubmission = await ContestSubmission.findByIdAndUpdate(
           contestSubmission._id,
           updateData,
           { session, new: true }
         );
         
+        console.log(`[JudgeIntegration] Successfully updated ContestSubmission:`, updatedSubmission); // DEBUG
+
         await session.commitTransaction();
         
-        // ✅ Update contest statistics
         await this.updateContestStats(contest._id, result.status === 'Accepted');
         
-        // ✅ Update standings asynchronously to avoid blocking
         setImmediate(async () => {
           try {
             await StandingsService.updateStandings(contest._id, result);
           } catch (error) {
-            console.error('Error updating standings:', error);
-            // Don't throw here to avoid affecting the main flow
+            console.error('[JudgeIntegration] Error updating standings:', error);
           }
         });
         
-        // ✅ Emit real-time updates
         await this.emitSubmissionUpdate(submissionId, contestSubmission, updateData, result);
         
-        // ✅ Handle special achievements (first AC, etc.)
         await this.handleAchievements(contestSubmission, updateData, contest);
         
       } catch (error) {
         await session.abortTransaction();
-        throw error;
+        throw error; // Re-throw to be caught by outer catch block
       } finally {
         session.endSession();
       }
       
     } catch (error) {
-      console.error('Error handling judge result for contest:', error);
+      console.error('[JudgeIntegration] Error handling judge result for contest:', error);
       
-      // ✅ Dead letter queue for failed processing
       await this.redis.lpush(
         `failed_judge_results:${new Date().toISOString().split('T')[0]}`,
         JSON.stringify({ submissionId, result, error: error.message, timestamp: new Date() })
       );
       
     } finally {
-      // ✅ Cleanup
       this.processingSubmissions.delete(submissionId);
       
-      // Release lock only if we own it
       const script = `
         if redis.call("get", KEYS[1]) == ARGV[1] then
           return redis.call("del", KEYS[1])
@@ -167,7 +157,7 @@ class JudgeIntegration {
     }
   }
 
-  // ✅ Update contest statistics atomically
+  // ... rest of the file is the same
   async updateContestStats(contestId, isAccepted) {
     try {
       const updateQuery = { $inc: { totalSubmissions: 1 } };
@@ -181,12 +171,10 @@ class JudgeIntegration {
     }
   }
 
-  // ✅ Enhanced real-time emission with proper error handling
   async emitSubmissionUpdate(submissionId, contestSubmission, updateData, result) {
     try {
       const io = require('../../sockets');
       
-      // Emit to submission subscriber
       io.to(`submission_${submissionId}`).emit('submission_result', {
         submissionId,
         contestSubmissionId: contestSubmission._id,
@@ -197,7 +185,6 @@ class JudgeIntegration {
         timestamp: new Date()
       });
       
-      // Emit to contest room (limited info for privacy)
       io.to(`contest_${contestSubmission.contest._id}`).emit('contest_submission_update', {
         contestId: contestSubmission.contest._id,
         problemLabel: contestSubmission.problemLabel,
@@ -213,12 +200,10 @@ class JudgeIntegration {
     }
   }
 
-  // ✅ Handle special achievements and milestones
   async handleAchievements(contestSubmission, updateData, contest) {
     if (!updateData.isAccepted) return;
     
     try {
-      // Check if this is the first AC for this problem
       const firstAC = await ContestSubmission.findOne({
         contest: contest._id,
         problem: contestSubmission.problem,
@@ -227,7 +212,6 @@ class JudgeIntegration {
       });
       
       if (!firstAC) {
-        // This is first AC for this problem!
         const io = require('../../sockets');
         io.to(`contest_${contest._id}`).emit('first_blood', {
           contestId: contest._id,
@@ -242,7 +226,6 @@ class JudgeIntegration {
     }
   }
 
-  // ✅ Cleanup method for failed submissions
   async cleanupFailedResults(days = 7) {
     try {
       const cutoffDate = new Date();
@@ -260,7 +243,6 @@ class JudgeIntegration {
     }
   }
 
-  // ✅ Retry failed submissions
   async retryFailedSubmissions(date) {
     try {
       const key = `failed_judge_results:${date}`;
@@ -270,10 +252,9 @@ class JudgeIntegration {
         const { submissionId, result } = JSON.parse(resultStr);
         console.log(`Retrying failed submission: ${submissionId}`);
         
-        // Retry with exponential backoff
         setTimeout(() => {
           this.handleJudgeResult(submissionId, result);
-        }, Math.random() * 5000); // Random delay 0-5 seconds
+        }, Math.random() * 5000);
       }
       
     } catch (error) {
@@ -284,7 +265,6 @@ class JudgeIntegration {
 
 const judgeIntegration = new JudgeIntegration();
 
-// ✅ Export the enhanced handler
 module.exports = {
   handleJudgeResult: judgeIntegration.handleJudgeResult.bind(judgeIntegration),
   cleanupFailedResults: judgeIntegration.cleanupFailedResults.bind(judgeIntegration),
