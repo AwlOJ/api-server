@@ -7,15 +7,17 @@ const {
   registerForContest,
   getStandings,
   submitToContest,
-  publishContest
+  publishContest,
+  getUserSubmissionsInContest
 } = require('../controllers/contest.controller');
 const { auth, authorize } = require('../middleware/auth');
 const { validateContest, validateContestSubmission } = require('../middleware/contest.validation');
 
 // Public routes
 router.get('/', getContests);
-router.get('/:id', getContest);
+router.get('/:id', auth, getContest); // Added auth here to check registration status
 router.get('/:id/standings', getStandings);
+router.get('/:id/submissions', auth, getUserSubmissionsInContest); // New route
 
 // Authenticated routes
 router.post('/:id/register', auth, registerForContest);

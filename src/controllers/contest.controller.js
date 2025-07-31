@@ -407,6 +407,39 @@ const getStandings = async (req, res) => {
     }
 };
 
+const getUserSubmissionsInContest = async (req, res) => {
+  try {
+    const { id: contestId } = req.params;
+    const userId = req.user.userId;
+
+    if (!mongoose.Types.ObjectId.isValid(contestId)) {
+      return res.status(400).json({ success: false, message: 'Invalid contest ID' });
+    }
+
+    const submissions = await ContestSubmission.find({ contest: contestId, user: userId })
+      .populate({
+        path: 'submission',
+        select: 'status language createdAt'
+      })
+      .populate({
+        path: 'problem',
+        select: 'title'
+      })
+      .sort({ createdAt: -1 });
+
+    if (!submissions) {
+        return res.status(404).json({ success: false, message: 'No submissions found for this user in this contest.' });
+    }
+    
+    res.json({ success: true, data: submissions });
+
+  } catch (error) {
+    console.error('Get user submissions in contest error:', error);
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+};
+
+
 module.exports = {
   getContests,
   getContest,
@@ -414,5 +447,6 @@ module.exports = {
   registerForContest,
   publishContest,
   getStandings,
-  submitToContest
+  submitToContest,
+  getUserSubmissionsInContest
 };
