@@ -352,7 +352,7 @@ const submitToContest = async (req, res) => {
     addSubmissionJob(submission._id, { isContest: true, contestId: contestId, contestSubmissionId: contestSubmission._id })
       .catch(err => console.error(`Failed to add submission ${submission._id} to queue`, err));
 
-    const io = require('../../sockets');
+    const io = req.app.get('io'); // Correct way to get the io instance
     if (io) {
         io.to(`contest_${contestId}`).emit('new_submission', {
           contestId,
